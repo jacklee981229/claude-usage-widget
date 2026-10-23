@@ -1,0 +1,11 @@
+{
+  "name": "claude-usage-widget",
+  "owner": { "name": "Jack" },
+  "plugins": [
+    {
+      "name": "usage-file",
+      "source": "./mod",
+      "description": "Writes the official 5-hour and weekly usage to a file for the desktop usage widget"
+    }
+  ]
+}

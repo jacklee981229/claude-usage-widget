@@ -1,0 +1,5 @@
+{
+  "name": "usage-file",
+  "version": "0.1.0",
+  "description": "Writes the official 5-hour and weekly usage to a file for the desktop usage widget"
+}
