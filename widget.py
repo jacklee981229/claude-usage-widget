@@ -19,7 +19,20 @@ WIDTH, HEIGHT = 236, 300
 BG, TEXT, MUTED, TRACK = "#171717", "#ededed", "#a3a3a3", "#2a2a2a"
 # The ring and bar take one colour a day, round the rainbow from Monday's red to Sunday's violet.
 RAINBOW = ("#ff453a", "#ff9f0a", "#ffd60a", "#30d158", "#0a84ff", "#5e5ce6", "#bf5af2")
-LABEL, SMALL, BIG, MONO = ("Segoe UI Variable Text", 10), ("Segoe UI Variable Text", 8), ("Segoe UI Variable Display", 24, "bold"), ("Cascadia Mono", 8)
+FONT_DIR = Path(__file__).resolve().parent / "fonts"
+FR_PRIVATE = 0x10
+
+
+def load_font():
+    """Hanken Grotesk for this process only, so nothing is installed in Windows; Segoe UI if the files are missing."""
+    add = ctypes.windll.gdi32.AddFontResourceExW
+    add.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p]
+    loaded = [add(str(FONT_DIR / f"HankenGrotesk-{weight}.ttf"), FR_PRIVATE, None) for weight in ("Regular", "Bold")]
+    return "Hanken Grotesk" if all(loaded) else "Segoe UI Variable Text"
+
+
+FONT = load_font()
+LABEL, SMALL, BIG, MONO = (FONT, 10), (FONT, 8), (FONT, 24, "bold"), ("Cascadia Mono", 8)
 # The ring and the bar, in logical pixels.
 RING_CY, RING_R, RING_W = 118, 58, 15
 BAR_Y, BAR_H = 224, 10

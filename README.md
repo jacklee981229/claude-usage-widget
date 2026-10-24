@@ -7,6 +7,7 @@ A small widget on your desktop that estimates how much of your Claude Max plan y
 - The official reading only changes when a Claude app session gets a reply. The editor extension's Claude Code may be too old to run mods (they need 2.1.287 or newer), so a day spent there runs on the estimate since the last reading.
 - It sits just above the desktop, behind all your windows, and comes to the front while the desktop is active (Win+D, or a click on the desktop). It stays out of the taskbar and Alt+Tab, and updates every 30 seconds.
 - The donut and bar change colour each day, round the rainbow from red on Monday to violet on Sunday.
+- The text is in Hanken Grotesk, under the SIL Open Font License, from `fonts\`, like the to-do widget. Only the widget loads it, so nothing is installed in Windows; without the files it falls back to Segoe UI.
 
 ## Commands
 
