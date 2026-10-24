@@ -1,7 +1,9 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from widget import resets_at, resets_in, source_text
+from datetime import date
+
+from widget import RAINBOW, day_colour, resets_at, resets_in, source_text
 
 UTC = timezone.utc
 MALAYSIA = timezone(timedelta(hours=8))
@@ -28,6 +30,15 @@ class SourceTextTest(unittest.TestCase):
 
     def test_no_reading_is_an_estimate_at_now(self):
         self.assertEqual(source_text(None, datetime(2026, 10, 23, 8, 0, tzinfo=UTC), MALAYSIA), "estimate · 16:00")
+
+
+class DayColourTest(unittest.TestCase):
+    def test_a_week_goes_round_the_rainbow_from_monday(self):
+        week = [day_colour(date(2026, 10, 19 + i)) for i in range(7)]  # Monday 19 Oct to Sunday 25 Oct
+        self.assertEqual(week, list(RAINBOW))
+
+    def test_next_monday_starts_again(self):
+        self.assertEqual(day_colour(date(2026, 10, 26)), RAINBOW[0])
 
 
 if __name__ == "__main__":

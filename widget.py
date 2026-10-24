@@ -15,8 +15,15 @@ import usage_estimate as ue
 
 POSITION_FILE = Path(__file__).resolve().parent / "data" / "position.json"
 REFRESH_MS = 30_000
-WIDTH, HEIGHT = 300, 138
-BG, TEXT, MUTED, TRACK, ACCENT = "#1f1f1f", "#e8e6e3", "#9a9894", "#3a3a3a", "#d85a30"
+WIDTH, HEIGHT = 236, 300
+BG, TEXT, MUTED, TRACK = "#171717", "#ededed", "#a3a3a3", "#2a2a2a"
+# The ring and bar take one colour a day, round the rainbow from Monday's red to Sunday's violet.
+RAINBOW = ("#ff453a", "#ff9f0a", "#ffd60a", "#30d158", "#0a84ff", "#5e5ce6", "#bf5af2")
+LABEL, SMALL, BIG, MONO = ("Segoe UI Variable Text", 10), ("Segoe UI Variable Text", 8), ("Segoe UI Variable Display", 24, "bold"), ("Cascadia Mono", 8)
+# The ring and the bar, in logical pixels.
+RING_CY, RING_R, RING_W = 118, 58, 15
+BAR_Y, BAR_H = 224, 10
+PAD = 22
 DESKTOP_CLASSES = ("Progman", "WorkerW")
 
 user32 = ctypes.windll.user32
@@ -47,6 +54,7 @@ GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = -20, 0x00000080, 0x08000000
 HWND_TOPMOST, HWND_NOTOPMOST, GW_HWNDNEXT, GW_HWNDPREV = -1, -2, 2, 3
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
 ERROR_ALREADY_EXISTS = 183
+DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE = 33, 2, 34, 0xFFFFFFFE
 
 
 def desktop_window():
@@ -90,6 +98,68 @@ def source_text(measured_at, now, tz=None):
     return f"official {measured_at.astimezone(tz):%H:%M} + est."
 
 
+def day_colour(day):
+    return RAINBOW[day.weekday()]
+
+
+def mix(a, b, t):
+    return tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+
+
+def rgb(colour):
+    return tuple(int(colour[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def coverage(distance):
+    """How much of a pixel a shape covers, from the pixel centre's distance to the shape's edge (negative inside)."""
+    return min(1.0, max(0.0, 0.5 - distance))
+
+
+def photo_rows(width, height, colour_at):
+    """Pixels for PhotoImage.put: one {…} group of #rrggbb per row."""
+    return " ".join("{" + " ".join("#%02x%02x%02x" % colour_at(x + 0.5, y + 0.5) for x in range(width)) + "}" for y in range(height))
+
+
+def ring_rows(size, radius, half_width, fraction, colour):
+    """A full track ring with an arc over it from 12 o'clock clockwise, round-capped, smoothed at the edges.
+
+    Tk's canvas draws arcs with jagged edges and square ends, so the ring is painted pixel by pixel instead.
+    """
+    bg, track, accent = rgb(BG), rgb(TRACK), rgb(colour)
+    centre, sweep = size / 2, 2 * math.pi * min(max(fraction, 0), 1)
+    caps = [(centre + radius * math.sin(a), centre - radius * math.cos(a)) for a in (0, sweep)]
+
+    def colour_at(x, y):
+        dx, dy = x - centre, y - centre
+        band = abs(math.hypot(dx, dy) - radius) - half_width
+        colour = mix(bg, track, coverage(band))
+        if sweep <= 0:
+            return colour
+        if sweep >= 2 * math.pi or math.atan2(dx, -dy) % (2 * math.pi) <= sweep:
+            arc = band
+        else:
+            arc = min(math.hypot(x - cx, y - cy) for cx, cy in caps) - half_width
+        return mix(colour, accent, coverage(arc))
+
+    return photo_rows(size, size, colour_at)
+
+
+def bar_rows(width, height, fraction, colour):
+    """A round-ended track with a round-ended fill from the left, smoothed at the edges."""
+    bg, track, accent = rgb(BG), rgb(TRACK), rgb(colour)
+    r = height / 2
+    end = max(r, r + (width - height) * min(max(fraction, 0), 1))
+
+    def capsule(x, y, right):
+        return math.hypot(x - min(max(x, r), right), y - r) - r
+
+    def colour_at(x, y):
+        colour = mix(bg, track, coverage(capsule(x, y, width - r)))
+        return mix(colour, accent, coverage(capsule(x, y, end))) if fraction > 0 else colour
+
+    return photo_rows(width, height, colour_at)
+
+
 def cursor():
     point = wintypes.POINT()
     user32.GetCursorPos(ctypes.byref(point))
@@ -120,6 +190,13 @@ class Widget:
         # A tool window stays out of Alt+Tab; no-activate stops a click from lifting it over other windows.
         ex_style = user32.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) & 0xFFFFFFFF
         user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex_style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
+        # Windows 11 rounds the card's corners, smoothly, and drops the grey frame it adds to them; older Windows keeps
+        # a plain square card.
+        try:
+            for attribute, value in ((DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND), (DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE)):
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(wintypes.HWND(self.hwnd), attribute, ctypes.byref(ctypes.c_uint(value)), 4)
+        except (OSError, AttributeError):
+            pass
         # Appearing made the widget the active window; hand focus back to where it was.
         if previous:
             user32.SetForegroundWindow(previous)
@@ -206,25 +283,29 @@ class Widget:
         c, p = self.canvas, self.px
         c.delete("all")
         if self.shown is None:
-            c.create_text(p(WIDTH / 2), p(HEIGHT / 2), text="Reading Claude Code transcripts...", fill=MUTED, font=("Segoe UI", 9))
+            c.create_text(p(WIDTH / 2), p(HEIGHT / 2), text="Reading Claude Code transcripts...", fill=MUTED, font=SMALL)
             return
         now, (five, five_reset, week, week_reset, measured_at) = self.shown
-        cx, cy, r = 58, 56, 36
-        box = (p(cx - r), p(cy - r), p(cx + r), p(cy + r))
-        c.create_oval(*box, outline=TRACK, width=p(10))
-        if five > 0:
-            c.create_arc(*box, start=90, extent=-3.6 * min(five, 100), style="arc", outline=ACCENT, width=p(10))
-        c.create_text(p(cx), p(cy), text=f"{five:.0f}%", fill=TEXT, font=("Segoe UI", 14, "bold"))
-        c.create_text(p(cx), p(108), text="5-hour", fill=MUTED, font=("Segoe UI", 8))
-        c.create_text(p(cx), p(123), text=resets_in(five_reset, now), fill=MUTED, font=("Segoe UI", 8))
-        x0, x1 = 120, 284
-        c.create_text(p(x0), p(28), text="Weekly · all models", anchor="w", fill=MUTED, font=("Segoe UI", 9))
-        c.create_text(p(x1), p(28), text=f"{week:.0f}%", anchor="e", fill=TEXT, font=("Segoe UI", 9, "bold"))
-        c.create_rectangle(p(x0), p(40), p(x1), p(48), fill=TRACK, width=0)
-        if week > 0:
-            c.create_rectangle(p(x0), p(40), p(x0 + (x1 - x0) * min(week, 100) / 100), p(48), fill=ACCENT, width=0)
-        c.create_text(p(x0), p(62), text=resets_at(week_reset), anchor="w", fill=MUTED, font=("Segoe UI", 8))
-        c.create_text(p(x1), p(123), text=source_text(measured_at, now), anchor="e", fill=MUTED, font=("Segoe UI", 8))
+        left, right, mid = p(PAD), p(WIDTH - PAD), p(WIDTH / 2)
+        # Redrawn at least every 30 s, so the colour turns soon after midnight.
+        colour = day_colour(datetime.now().date())
+        c.create_text(left, p(30), text="5-hour window", anchor="w", fill=MUTED, font=LABEL)
+        c.create_text(right, p(30), text=resets_in(five_reset, now), anchor="e", fill=MUTED, font=SMALL)
+        # Painted in real pixels, so the ring is as sharp at 150% scaling as at 100%.
+        size = p(2 * (RING_R + RING_W / 2) + 4)
+        ring = tk.PhotoImage(width=size, height=size)
+        ring.put(ring_rows(size, p(RING_R), p(RING_W) / 2, five / 100, colour))
+        c.create_image(mid, p(RING_CY), image=ring)
+        c.create_text(mid, p(RING_CY), text=f"{five:.0f}%", fill=TEXT, font=BIG)
+        c.create_text(left, p(BAR_Y - 18), text="This week", anchor="w", fill=MUTED, font=LABEL)
+        c.create_text(right, p(BAR_Y - 18), text=f"{week:.0f}%", anchor="e", fill=TEXT, font=LABEL + ("bold",))
+        bar = tk.PhotoImage(width=right - left, height=p(BAR_H))
+        bar.put(bar_rows(right - left, p(BAR_H), week / 100, colour))
+        c.create_image(left, p(BAR_Y), image=bar, anchor="nw")
+        c.create_text(left, p(BAR_Y + BAR_H + 16), text=resets_at(week_reset), anchor="w", fill=MUTED, font=SMALL)
+        c.create_text(left, p(HEIGHT - 24), text=source_text(measured_at, now), anchor="w", fill=MUTED, font=MONO)
+        # The canvas holds only a reference Tk can't see; without this the pictures vanish.
+        self.pictures = (ring, bar)
 
 
 if __name__ == "__main__":
