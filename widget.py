@@ -1,4 +1,4 @@
-"""Desktop widget showing estimated Claude plan usage: a 5-hour donut and a weekly bar.
+"""Desktop widget showing estimated Claude plan usage: a ring for the 5-hour window and a bar for the week.
 
 Start it with `pythonw widget.py` so no console window opens. Right-click it to exit.
 """
@@ -8,7 +8,7 @@ import math
 import threading
 import tkinter as tk
 from ctypes import wintypes
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import usage_estimate as ue
@@ -16,9 +16,12 @@ import usage_estimate as ue
 POSITION_FILE = Path(__file__).resolve().parent / "data" / "position.json"
 REFRESH_MS = 30_000
 WIDTH, HEIGHT = 236, 300
-BG, TEXT, MUTED, TRACK = "#171717", "#ededed", "#a3a3a3", "#2a2a2a"
-# The ring and bar take one colour a day, round the rainbow from Monday's red to Sunday's violet.
-RAINBOW = ("#ff453a", "#ff9f0a", "#ffd60a", "#30d158", "#0a84ff", "#5e5ce6", "#bf5af2")
+BG, TEXT, MUTED, TRACK = "#0b0e15", "#ededed", "#a3a3a3", "#1c202b"
+# The widgets' theme (W1): a near-black card with a soft indigo light falling from the top, and colours that say
+# whether the usage keeps up with the clock rather than which day it is.
+LIGHT, LIGHT_ALPHA = (94, 92, 230), 0.42
+ON_PACE, AHEAD, NEARLY_FULL, MARK = "#30d158", "#ff9f0a", "#ff4d7a", "#ffffff"
+FIVE_HOURS, WEEK = timedelta(hours=5), timedelta(days=7)
 FONT_DIR = Path(__file__).resolve().parent / "fonts"
 FR_PRIVATE = 0x10
 
@@ -32,10 +35,10 @@ def load_font():
 
 
 FONT = load_font()
-LABEL, SMALL, BIG, MONO = (FONT, 10), (FONT, 8), (FONT, 24, "bold"), ("Cascadia Mono", 8)
-# The ring and the bar, in logical pixels.
-RING_CY, RING_R, RING_W = 118, 58, 15
-BAR_Y, BAR_H = 224, 10
+LABEL, SMALL, BIG, MONO = (FONT, 10), (FONT, 8), (FONT, 26, "bold"), ("Cascadia Mono", 8)
+# The 5-hour ring and the weekly bar, in logical pixels.
+RING_CY, RING_R, RING_W = 118, 62, 14
+WEEK_Y, BAR_Y, BAR_H = 206, 222, 10
 PAD = 22
 DESKTOP_CLASSES = ("Progman", "WorkerW")
 
@@ -111,8 +114,27 @@ def source_text(measured_at, now, tz=None):
     return f"official {measured_at.astimezone(tz):%H:%M} + est."
 
 
-def day_colour(day):
-    return RAINBOW[day.weekday()]
+def elapsed(reset, now, length):
+    """How much of a window has run, 0 to 1, worked out from when it resets; None when no window is running."""
+    if reset is None:
+        return None
+    return min(1.0, max(0.0, 1 - (reset - now) / length))
+
+
+def pace(used, run):
+    """The ring's colour and word: nearly full, ahead of the clock by more than ten points, or keeping up."""
+    if used >= 85:
+        return NEARLY_FULL, "Nearly full"
+    # Compared in points, rounded, so exactly ten ahead stays on pace (0.36 + 0.1 isn't quite 0.46 in floats).
+    if run is not None and round(used - run * 100, 6) > 10:
+        return AHEAD, "Ahead of time"
+    return ON_PACE, "On pace"
+
+
+def light_at(x, y, width, height):
+    """The card's colour at a pixel: the indigo light is strongest above the top centre and gone 60% of the way out."""
+    reach = math.hypot((x - width / 2) / (1.2 * width), (y + 0.1 * height) / (0.6 * height)) / 0.6
+    return mix(rgb(BG), LIGHT, LIGHT_ALPHA * max(0.0, 1 - reach))
 
 
 def mix(a, b, t):
@@ -133,42 +155,65 @@ def photo_rows(width, height, colour_at):
     return " ".join("{" + " ".join("#%02x%02x%02x" % colour_at(x + 0.5, y + 0.5) for x in range(width)) + "}" for y in range(height))
 
 
-def ring_rows(size, radius, half_width, fraction, colour):
-    """A full track ring with an arc over it from 12 o'clock clockwise, round-capped, smoothed at the edges.
+def segment(x, y, a, b):
+    (ax, ay), (bx, by) = a, b
+    t = max(0.0, min(1.0, ((x - ax) * (bx - ax) + (y - ay) * (by - ay)) / ((bx - ax) ** 2 + (by - ay) ** 2)))
+    return math.hypot(x - ax - t * (bx - ax), y - ay - t * (by - ay))
 
-    Tk's canvas draws arcs with jagged edges and square ends, so the ring is painted pixel by pixel instead.
+
+def rings_rows(size, rings, bg_at):
+    """Rings, each a full track with an arc over it from 12 o'clock clockwise, round-capped, and a thin white mark
+    where the clock has got to; painted on the card's own light, smoothed at the edges.
+
+    Tk's canvas draws arcs with jagged edges and square ends, so the rings are painted pixel by pixel instead.
+    `rings` holds (radius, half width, fraction used, colour, track, fraction of time run or None).
     """
-    bg, track, accent = rgb(BG), rgb(TRACK), rgb(colour)
-    centre, sweep = size / 2, 2 * math.pi * min(max(fraction, 0), 1)
-    caps = [(centre + radius * math.sin(a), centre - radius * math.cos(a)) for a in (0, sweep)]
+    centre, parts = size / 2, []
+    for radius, half, fraction, colour, track, run in rings:
+        sweep = 2 * math.pi * min(max(fraction, 0), 1)
+        caps = [(centre + radius * math.sin(a), centre - radius * math.cos(a)) for a in (0, sweep)]
+        mark = None
+        if run is not None:
+            a = 2 * math.pi * run
+            mark = [(centre + r * math.sin(a), centre - r * math.cos(a)) for r in (radius - half - 3, radius + half + 3)]
+        parts.append((radius, half, sweep, caps, rgb(colour), rgb(track), mark))
+    white = rgb(MARK)
 
     def colour_at(x, y):
         dx, dy = x - centre, y - centre
-        band = abs(math.hypot(dx, dy) - radius) - half_width
-        colour = mix(bg, track, coverage(band))
-        if sweep <= 0:
-            return colour
-        if sweep >= 2 * math.pi or math.atan2(dx, -dy) % (2 * math.pi) <= sweep:
-            arc = band
-        else:
-            arc = min(math.hypot(x - cx, y - cy) for cx, cy in caps) - half_width
-        return mix(colour, accent, coverage(arc))
+        colour, angle = bg_at(x, y), math.atan2(dx, -dy) % (2 * math.pi)
+        for radius, half, sweep, caps, accent, track, mark in parts:
+            band = abs(math.hypot(dx, dy) - radius) - half
+            colour = mix(colour, track, coverage(band))
+            if sweep > 0:
+                inside = sweep >= 2 * math.pi or angle <= sweep
+                arc = band if inside else min(math.hypot(x - cx, y - cy) for cx, cy in caps) - half
+                colour = mix(colour, accent, coverage(arc))
+            if mark:
+                colour = mix(colour, white, coverage(segment(x, y, *mark) - 1))
+        return colour
 
     return photo_rows(size, size, colour_at)
 
 
-def bar_rows(width, height, fraction, colour):
-    """A round-ended track with a round-ended fill from the left, smoothed at the edges."""
-    bg, track, accent = rgb(BG), rgb(TRACK), rgb(colour)
+def bar_rows(width, height, fraction, colour, run, bg_at):
+    """A round-ended track with a round-ended fill from the left, and a thin white mark where the clock has got to;
+    painted on the card's own light, smoothed at the edges."""
+    track, accent, white = rgb(TRACK), rgb(colour), rgb(MARK)
     r = height / 2
     end = max(r, r + (width - height) * min(max(fraction, 0), 1))
+    mark = None if run is None else r + (width - height) * run
 
     def capsule(x, y, right):
         return math.hypot(x - min(max(x, r), right), y - r) - r
 
     def colour_at(x, y):
-        colour = mix(bg, track, coverage(capsule(x, y, width - r)))
-        return mix(colour, accent, coverage(capsule(x, y, end))) if fraction > 0 else colour
+        colour = mix(bg_at(x, y), track, coverage(capsule(x, y, width - r)))
+        if fraction > 0:
+            colour = mix(colour, accent, coverage(capsule(x, y, end)))
+        if mark is not None:
+            colour = mix(colour, white, coverage(abs(x - mark) - 1))
+        return colour
 
     return photo_rows(width, height, colour_at)
 
@@ -295,30 +340,49 @@ class Widget:
     def draw(self):
         c, p = self.canvas, self.px
         c.delete("all")
+        c.create_image(0, 0, image=self.backdrop(), anchor="nw")
         if self.shown is None:
             c.create_text(p(WIDTH / 2), p(HEIGHT / 2), text="Reading Claude Code transcripts...", fill=MUTED, font=SMALL)
             return
         now, (five, five_reset, week, week_reset, measured_at) = self.shown
         left, right, mid = p(PAD), p(WIDTH - PAD), p(WIDTH / 2)
-        # Redrawn at least every 30 s, so the colour turns soon after midnight.
-        colour = day_colour(datetime.now().date())
         c.create_text(left, p(30), text="5-hour window", anchor="w", fill=MUTED, font=LABEL)
         c.create_text(right, p(30), text=resets_in(five_reset, now), anchor="e", fill=MUTED, font=SMALL)
-        # Painted in real pixels, so the ring is as sharp at 150% scaling as at 100%.
-        size = p(2 * (RING_R + RING_W / 2) + 4)
+        five_run, week_run = elapsed(five_reset, now, FIVE_HOURS), elapsed(week_reset, now, WEEK)
+        five_colour, five_word = pace(five, five_run)
+        week_colour, week_word = pace(week, week_run)
+        width, height = p(WIDTH), p(HEIGHT)
+        # Painted in real pixels, so the ring and bar are as sharp at 150% scaling as at 100%.
+        size = p(2 * (RING_R + RING_W / 2) + 10)
+        x0, y0 = mid - size // 2, p(RING_CY) - size // 2
         ring = tk.PhotoImage(width=size, height=size)
-        ring.put(ring_rows(size, p(RING_R), p(RING_W) / 2, five / 100, colour))
-        c.create_image(mid, p(RING_CY), image=ring)
-        c.create_text(mid, p(RING_CY), text=f"{five:.0f}%", fill=TEXT, font=BIG)
-        c.create_text(left, p(BAR_Y - 18), text="This week", anchor="w", fill=MUTED, font=LABEL)
-        c.create_text(right, p(BAR_Y - 18), text=f"{week:.0f}%", anchor="e", fill=TEXT, font=LABEL + ("bold",))
+        ring.put(rings_rows(size, [(p(RING_R), p(RING_W) / 2, five / 100, five_colour, TRACK, five_run)],
+                            lambda x, y: light_at(x0 + x, y0 + y, width, height)))
+        c.create_image(x0, y0, image=ring, anchor="nw")
+        c.create_text(mid, p(RING_CY - 4), text=f"{five:.0f}%", fill=TEXT, font=BIG)
+        if five_run is not None:  # no window running yet: nothing to keep up with
+            c.create_text(mid, p(RING_CY + 20), text=five_word, fill=five_colour, font=SMALL + ("bold",))
+        label = c.create_text(left, p(WEEK_Y), text="This week", anchor="w", fill=MUTED, font=LABEL)
+        c.create_text(c.bbox(label)[2] + p(6), p(WEEK_Y), text=week_word, anchor="w", fill=week_colour,
+                      font=SMALL + ("bold",))
+        c.create_text(right, p(WEEK_Y), text=f"{week:.0f}%", anchor="e", fill=TEXT, font=LABEL + ("bold",))
+        bar_top = p(BAR_Y)
         bar = tk.PhotoImage(width=right - left, height=p(BAR_H))
-        bar.put(bar_rows(right - left, p(BAR_H), week / 100, colour))
-        c.create_image(left, p(BAR_Y), image=bar, anchor="nw")
+        bar.put(bar_rows(right - left, p(BAR_H), week / 100, week_colour, week_run,
+                         lambda x, y: light_at(left + x, bar_top + y, width, height)))
+        c.create_image(left, bar_top, image=bar, anchor="nw")
         c.create_text(left, p(BAR_Y + BAR_H + 16), text=resets_at(week_reset), anchor="w", fill=MUTED, font=SMALL)
         c.create_text(left, p(HEIGHT - 24), text=source_text(measured_at, now), anchor="w", fill=MUTED, font=MONO)
-        # The canvas holds only a reference Tk can't see; without this the pictures vanish.
+        # The canvas holds only references Tk can't see; without this the pictures vanish.
         self.pictures = (ring, bar)
+
+    def backdrop(self):
+        """The card with its light, painted once."""
+        if getattr(self, "light", None) is None:
+            width, height = self.px(WIDTH), self.px(HEIGHT)
+            self.light = tk.PhotoImage(width=width, height=height)
+            self.light.put(photo_rows(width, height, lambda x, y: light_at(x, y, width, height)))
+        return self.light
 
 
 if __name__ == "__main__":

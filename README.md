@@ -1,12 +1,12 @@
 # Claude usage widget
 
-A small widget on your desktop that estimates how much of your Claude Max plan you've used: the 5-hour window (donut) and the weekly limit (bar).
+A small widget on your desktop that estimates how much of your Claude Max plan you've used: the 5-hour window (ring) and the weekly limit (bar).
 
 - It starts from the official numbers when it has them: the `usage-file` mod (in `mod\`) runs inside the Claude app's Claude Code and writes your real 5-hour and weekly percentages to `%USERPROFILE%\.claude\usage-widget\usage.json` each time they move. The footer then reads `official 14:02 + est.`: the reading from 14:02, plus an estimate of what you've used since.
 - The estimate comes from Claude Code's transcripts, which the editor extension and the Claude app both write as you work: each reply becomes a share of your limits. It never touches your Claude login. With no usable reading (none yet, or its windows have reset) the footer reads `estimate · 14:02` and the numbers are the estimate alone, usually within a few points of Claude's usage page but off by about a fifth in some windows.
 - The official reading only changes when a Claude app session gets a reply. The editor extension's Claude Code may be too old to run mods (they need 2.1.287 or newer), so a day spent there runs on the estimate since the last reading.
 - It sits just above the desktop, behind all your windows, and comes to the front while the desktop is active (Win+D, or a click on the desktop). It stays out of the taskbar and Alt+Tab, and updates every 30 seconds.
-- The donut and bar change colour each day, round the rainbow from red on Monday to violet on Sunday.
+- A thin white mark on the ring and on the bar shows how far that window has run. Each is green while your use keeps up with the clock, orange when it runs more than ten points ahead, and pink from 85%.
 - The text is in Hanken Grotesk, under the SIL Open Font License, from `fonts\`, like the to-do widget. Only the widget loads it, so nothing is installed in Windows; without the files it falls back to Segoe UI.
 
 ## Commands

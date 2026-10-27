@@ -9,6 +9,15 @@ Desktop widget for Claude plan usage (Python + tkinter, no packages) plus `usage
 - `mod/hooks/register.ts`: the mod; `mod/tests/` its tests.
 - `scratch/check_accuracy.py`: recheck the calibration factors.
 
+## Theme (W1, shared with the to-do widget)
+
+- Ground: near-black `#0b0e15` with a soft indigo light falling from the top (`light_at`); the ring and bar are painted on that light.
+- Colour logic: colours mean something. Green keeps up with the clock, orange runs more than ten points ahead, pink from 85%; a thin white mark shows how far the window has run. No colour of the day.
+- Type: Hanken Grotesk; the percentage big and bold, the pace word small and in its colour.
+- Shapes: one round-capped ring for the 5-hour window, a round-ended bar for the week, both painted pixel by pixel; Windows 11 rounded corners.
+- Elements: A (dark ground with light), B (colours that mean something), E (round data).
+- Looks we don't use: two rings stacked (the week goes in the bar).
+
 ## Rules and traps
 
 - There's no `claude` on PATH. Run plugin commands with the Claude app's own binary, at `%LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc\claude-code\<version>\<hash>\claude.exe` (find the current one among the running `claude.exe` processes): `plugin validate mod`, `plugin test mod`.
