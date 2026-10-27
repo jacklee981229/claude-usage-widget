@@ -8,6 +8,7 @@ Desktop widget for Claude plan usage (Python + tkinter, no packages) plus `usage
 - `widget.py`: the window and its drawing.
 - `mod/hooks/register.ts`: the mod; `mod/tests/` its tests.
 - `scratch/check_accuracy.py`: recheck the calibration factors.
+- `scratch/shoot.py`: the widget in set states with test data. After a change to the look, rerun it for the README's pictures (`.github/readme/`) and, with `hold`, for the showcase video's clips (`usage`, `usage-ahead`).
 
 ## Theme (W1, shared with the to-do widget)
 
@@ -24,4 +25,4 @@ Desktop widget for Claude plan usage (Python + tkinter, no packages) plus `usage
 - `plugin list` shows the installed mod is read from `mod/` itself; if a change doesn't show in a new session, run `plugin marketplace update claude-usage-widget`. The mod API normalizes paths, so a test sees `C:\Users\...\.claude\...`, not the `/` the mod wrote.
 - Mods need Claude Code 2.1.287+. The Claude Code in an editor extension can be older, so only Claude app sessions are sure to write the file.
 - TypeScript isn't installed here, so `tsc` can't run; `plugin validate` and `plugin test` are the mod's checks.
-- Jack's own widget runs from Startup as `Claude Usage.exe` (made by `startup.py`), with a one-copy mutex. To screenshot a change, run a separate copy that skips the mutex; never stop his.
+- Jack's own widget runs from Startup as `Claude Usage.exe` (made by `startup.py`), with a one-copy mutex. To screenshot a change, use `scratch/shoot.py`, which skips the mutex; never stop his.
