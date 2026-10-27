@@ -2,6 +2,8 @@
 
 # Claude usage widget
 
+**English** | [简体中文](README.zh-CN.md)
+
 A small Windows desktop widget for your Claude Max plan:<br>the 5-hour window as a ring, the weekly limit as a bar.
 
 <img src=".github/readme/on-pace.png" width="300" alt="The widget: 34% of the 5-hour window and 28% of the week used, both on pace, in green">
@@ -87,6 +89,7 @@ Only one copy runs at a time. It reopens where you left it (saved in `data\posit
 |---|---|
 | `python -m unittest discover -s tests` | Run the tests |
 | `python scratch\check_accuracy.py` | Compare the estimate with Claude's real numbers |
+| `python scratch\shoot.py .github\readme` | Remake these screenshots, with test data |
 | `claude plugin test mod` | Run the mod's tests (with the Claude app's `claude.exe`, see CLAUDE.md) |
 
 The text is in Hanken Grotesk (SIL Open Font License), loaded from `fonts\` for the widget only; without it, Segoe UI.
