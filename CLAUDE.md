@@ -5,7 +5,7 @@ Desktop widget for Claude plan usage (Python + tkinter, no packages) plus `usage
 ## Where to look
 
 - `usage_estimate.py`: the transcript estimate, `read_official` (the mod's file) and `combine` (official reading + estimate since).
-- `widget.py`: the window and its drawing, and the alert card (`check_alerts`; what was raised is in `data/alerts.json`).
+- `widget.py`: the window and its drawing, and the alert chime (`check_alerts`; what was raised is in `data/alerts.json`). The alert is a sound only: Jack turned down the on-screen alert card (it made him anxious), so don't bring one back.
 - `usage_estimate.forecast`: when each window fills at the recent pace; it drives the "Full in" word and the alerts.
 - `mod/hooks/register.ts`: the mod; `mod/tests/` its tests.
 - `scratch/check_accuracy.py`: recheck the calibration factors.

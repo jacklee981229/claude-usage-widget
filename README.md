@@ -33,7 +33,7 @@ The thin white mark shows how far each window has run. Green means your use keep
 
 - **Official numbers first.** A small Claude Code mod writes your real 5-hour and weekly percentages; the widget adds an estimate of what you've used since.
 - **Works without the mod.** It estimates from Claude Code's transcripts, and never touches your Claude login.
-- **Warns before you run out.** When the last half hour's pace would fill the 5-hour window before it resets (the last day's pace for the week), it says when, and a card comes up over every window until you click it. Again at 90%.
+- **Warns before you run out.** When the last half hour's pace would fill the 5-hour window before it resets (the last day's pace for the week), it says when and plays a short chime. Again at 90%.
 - **Stays out of the way.** It sits on the desktop behind your windows, comes forward on Win+D, and stays out of the taskbar and Alt+Tab.
 - **Nothing to install.** Python and tkinter only, no packages. Updates every 30 seconds.
 
