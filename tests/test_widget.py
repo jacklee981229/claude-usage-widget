@@ -1,7 +1,8 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from widget import AHEAD, FIVE_HOURS, NEARLY_FULL, ON_PACE, WEEK, elapsed, pace, resets_at, resets_in, source_text
+from widget import (AHEAD, FIVE_HOURS, NEARLY_FULL, ON_PACE, WEEK, due_alerts, elapsed, full_in, pace, resets_at,
+                    resets_in, source_text)
 
 UTC = timezone.utc
 MALAYSIA = timezone(timedelta(hours=8))
@@ -59,6 +60,55 @@ class PaceTest(unittest.TestCase):
 
     def test_no_window_running_is_on_pace(self):
         self.assertEqual(pace(0, None), (ON_PACE, "On pace"))
+
+    def test_filling_before_the_reset_says_when(self):
+        now = datetime(2026, 10, 28, 6, 0, tzinfo=UTC)
+        self.assertEqual(pace(40, 0.5, now + timedelta(minutes=42, seconds=21), now), (AHEAD, "Full in ~43m"))
+        self.assertEqual(pace(91, 0.9, now + timedelta(minutes=12), now), (NEARLY_FULL, "Full in ~12m"))
+
+
+class FullInTest(unittest.TestCase):
+    NOW = datetime(2026, 10, 28, 6, 0, tzinfo=UTC)
+
+    def test_minutes_hours_and_days(self):
+        self.assertEqual(full_in(self.NOW + timedelta(minutes=59, seconds=1), self.NOW), "Full in ~1h 0m")
+        self.assertEqual(full_in(self.NOW + timedelta(hours=1, minutes=20), self.NOW), "Full in ~1h 20m")
+        self.assertEqual(full_in(self.NOW + timedelta(days=1, hours=4, minutes=30), self.NOW), "Full in ~1d 4h")
+
+    def test_already_full(self):
+        self.assertEqual(full_in(self.NOW, self.NOW), "Full")
+
+
+class DueAlertsTest(unittest.TestCase):
+    NOW = datetime(2026, 10, 28, 6, 0, tzinfo=UTC)
+    RESET = datetime(2026, 10, 28, 8, 44, tzinfo=UTC)
+    SOON = NOW + timedelta(minutes=42)
+
+    def test_filling_before_the_reset_raises_once_per_window(self):
+        due = due_alerts({}, self.NOW, 68, self.RESET, self.SOON, None, MALAYSIA)
+        self.assertEqual(due, {"five-pace": self.RESET.isoformat()})
+        self.assertEqual(due_alerts(due, self.NOW, 70, self.RESET, self.SOON, None, MALAYSIA), {})
+        later = self.RESET + timedelta(hours=5)
+        self.assertEqual(due_alerts(due, self.NOW, 40, later, self.SOON, None, MALAYSIA),
+                         {"five-pace": later.isoformat()})
+
+    def test_90_percent_raises_even_after_the_pace_alert(self):
+        sent = {"five-pace": self.RESET.isoformat()}
+        self.assertEqual(due_alerts(sent, self.NOW, 89, self.RESET, self.SOON, None, MALAYSIA), {})
+        self.assertEqual(due_alerts(sent, self.NOW, 90, self.RESET, None, None, MALAYSIA),
+                         {"five-full": self.RESET.isoformat()})
+
+    def test_no_window_raises_nothing(self):
+        self.assertEqual(due_alerts({}, self.NOW, 95, None, None, None, MALAYSIA), {})
+
+    def test_week_raises_once_a_malaysian_day(self):
+        sent = due_alerts({}, self.NOW, 10, self.RESET, None, self.SOON, MALAYSIA)
+        self.assertEqual(sent, {"week-pace": "2026-10-28"})
+        # 23:30 the same day in Malaysia, then 00:30 the next.
+        self.assertEqual(due_alerts(sent, datetime(2026, 10, 28, 15, 30, tzinfo=UTC), 10, None, None, self.SOON,
+                                    MALAYSIA), {})
+        self.assertEqual(due_alerts(sent, datetime(2026, 10, 28, 16, 30, tzinfo=UTC), 10, None, None, self.SOON,
+                                    MALAYSIA), {"week-pace": "2026-10-29"})
 
 
 if __name__ == "__main__":

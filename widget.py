@@ -7,6 +7,7 @@ import json
 import math
 import threading
 import tkinter as tk
+import winsound
 from ctypes import wintypes
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +15,9 @@ from pathlib import Path
 import usage_estimate as ue
 
 POSITION_FILE = Path(__file__).resolve().parent / "data" / "position.json"
+# Which alerts have been raised, so a restart doesn't raise them again for the same window or day.
+ALERTS_FILE = Path(__file__).resolve().parent / "data" / "alerts.json"
+FULL_ALERT = 90
 REFRESH_MS = 30_000
 WIDTH, HEIGHT = 236, 300
 BG, TEXT, MUTED, TRACK = "#0b0e15", "#ededed", "#a3a3a3", "#1c202b"
@@ -40,6 +44,8 @@ LABEL, SMALL, BIG, MONO = (FONT, 10), (FONT, 8), (FONT, 26, "bold"), ("Cascadia 
 RING_CY, RING_R, RING_W = 118, 62, 14
 WEEK_Y, BAR_Y, BAR_H = 206, 222, 10
 PAD = 22
+# The alert card: a header, then a row for each window that raised one.
+ALERT_WIDTH, ALERT_TOP, ALERT_ROW = 280, 56, 84
 DESKTOP_CLASSES = ("Progman", "WorkerW")
 
 user32 = ctypes.windll.user32
@@ -90,6 +96,24 @@ def desktop_window():
     return found[0] if found else progman
 
 
+def round_corners(hwnd):
+    """Windows 11 rounds the card's corners, smoothly, and drops the grey frame it adds to them; older Windows keeps
+    a plain square card."""
+    try:
+        for attribute, value in ((DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND), (DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE)):
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(wintypes.HWND(hwnd), attribute, ctypes.byref(ctypes.c_uint(value)), 4)
+    except (OSError, AttributeError):
+        pass
+
+
+def load_sent():
+    try:
+        sent = json.loads(ALERTS_FILE.read_text(encoding="utf-8"))
+        return sent if isinstance(sent, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def class_name(hwnd):
     buffer = ctypes.create_unicode_buffer(64)
     user32.GetClassNameW(hwnd, buffer, 64)
@@ -121,14 +145,42 @@ def elapsed(reset, now, length):
     return min(1.0, max(0.0, 1 - (reset - now) / length))
 
 
-def pace(used, run):
-    """The ring's colour and word: nearly full, ahead of the clock by more than ten points, or keeping up."""
+def full_in(full_at, now):
+    minutes = math.ceil((full_at - now).total_seconds() / 60)
+    if minutes <= 0:
+        return "Full"
+    hours, minutes = divmod(minutes, 60)
+    if hours >= 24:
+        return f"Full in ~{hours // 24}d {hours % 24}h"
+    return f"Full in ~{hours}h {minutes}m" if hours else f"Full in ~{minutes}m"
+
+
+def pace(used, run, full_at=None, now=None):
+    """The ring's colour and word: when it fills, if the recent pace fills it before the reset; otherwise nearly
+    full, ahead of the clock by more than ten points, or keeping up."""
+    if full_at is not None:
+        return NEARLY_FULL if used >= 85 else AHEAD, full_in(full_at, now)
     if used >= 85:
         return NEARLY_FULL, "Nearly full"
     # Compared in points, rounded, so exactly ten ahead stays on pace (0.36 + 0.1 isn't quite 0.46 in floats).
     if run is not None and round(used - run * 100, 6) > 10:
         return AHEAD, "Ahead of time"
     return ON_PACE, "On pace"
+
+
+def due_alerts(sent, now, five, five_reset, five_full, week_full, tz=None):
+    """The alerts to raise now, as {key: window or day}, leaving out any already raised for that window or day:
+    the 5-hour window filling before its reset and reaching 90% (once each per window), the week filling before its
+    reset (once a day)."""
+    due = {}
+    if five_reset is not None:
+        if five_full is not None:
+            due["five-pace"] = five_reset.isoformat()
+        if five >= FULL_ALERT:
+            due["five-full"] = five_reset.isoformat()
+    if week_full is not None:
+        due["week-pace"] = now.astimezone(tz).date().isoformat()
+    return {key: value for key, value in due.items() if sent.get(key) != value}
 
 
 def light_at(x, y, width, height):
@@ -248,13 +300,7 @@ class Widget:
         # A tool window stays out of Alt+Tab; no-activate stops a click from lifting it over other windows.
         ex_style = user32.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) & 0xFFFFFFFF
         user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex_style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
-        # Windows 11 rounds the card's corners, smoothly, and drops the grey frame it adds to them; older Windows keeps
-        # a plain square card.
-        try:
-            for attribute, value in ((DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND), (DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE)):
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(wintypes.HWND(self.hwnd), attribute, ctypes.byref(ctypes.c_uint(value)), 4)
-        except (OSError, AttributeError):
-            pass
+        round_corners(self.hwnd)
         # Appearing made the widget the active window; hand focus back to where it was.
         if previous:
             user32.SetForegroundWindow(previous)
@@ -262,6 +308,7 @@ class Widget:
         self.reader = ue.TranscriptReader()
         self.result = self.shown = None  # result is written by the worker thread
         self.worker = None
+        self.alert, self.alert_rows = None, set()
         self.draw()
         self.refresh()
         self.poll()
@@ -329,13 +376,90 @@ class Widget:
     def compute(self):
         self.reader.refresh()
         now = datetime.now(timezone.utc)
-        self.result = (now, ue.combine(self.reader.costs.values(), self.reader.activity, now, ue.read_official()))
+        costs = list(self.reader.costs.values())
+        combined = ue.combine(costs, self.reader.activity, now, ue.read_official())
+        self.result = (now, combined, ue.forecast(costs, now, *combined[:4]))
 
     def poll(self):
         if self.result is not self.shown:
             self.shown = self.result
             self.draw()
+            self.check_alerts()
         self.root.after(500, self.poll)
+
+    def check_alerts(self):
+        now, (five, five_reset, _, _, _), (five_full, week_full) = self.shown
+        sent = load_sent()
+        due = due_alerts(sent, now, five, five_reset, five_full, week_full)
+        if due:
+            sent.update(due)
+            # An exception here would stop poll for good; unsaved, an alert only comes back after a restart.
+            try:
+                ALERTS_FILE.parent.mkdir(exist_ok=True)
+                ALERTS_FILE.write_text(json.dumps(sent), encoding="utf-8")
+            except OSError:
+                pass
+            if not self.alert_rows:
+                self.alert_since = now
+            self.alert_rows |= {key.split("-")[0] for key in due}
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        if self.alert_rows:
+            self.draw_alert()
+
+    def draw_alert(self):
+        """A card in the middle of the screen, above every window until it's clicked, kept up to date while it's
+        open. It never takes the keyboard, so a prompt being typed carries on."""
+        p = self.px
+        rows = [row for row in ("five", "week") if row in self.alert_rows]
+        width, height = p(ALERT_WIDTH), p(ALERT_TOP + ALERT_ROW * len(rows))
+        if self.alert is None:
+            self.alert = tk.Toplevel(self.root)
+            self.alert.overrideredirect(True)
+            self.alert_canvas = tk.Canvas(self.alert, bg=BG, highlightthickness=0, cursor="hand2")
+            self.alert_canvas.pack()
+            self.alert_canvas.bind("<Button-1>", self.close_alert)
+            self.alert.update_idletasks()
+            hwnd = int(self.alert.wm_frame(), 16)
+            ex_style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF
+            user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
+            round_corners(hwnd)
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        if (width, height) != (self.alert_canvas.winfo_reqwidth(), self.alert_canvas.winfo_reqheight()):
+            self.alert_canvas.configure(width=width, height=height)
+            x, y = (self.root.winfo_screenwidth() - width) // 2, (self.root.winfo_screenheight() - height) // 2
+            self.alert.geometry(f"{width}x{height}+{x}+{y}")
+            self.alert_light = tk.PhotoImage(width=width, height=height)
+            self.alert_light.put(photo_rows(width, height, lambda x, y: light_at(x, y, width, height)))
+        c = self.alert_canvas
+        c.delete("all")
+        c.create_image(0, 0, image=self.alert_light, anchor="nw")
+        left, right = p(PAD), width - p(PAD)
+        c.create_text(left, p(24), text=f"Usage alert · {self.alert_since.astimezone():%H:%M}", anchor="w",
+                      fill=MUTED, font=SMALL)
+        c.create_text(right, p(24), text="✕", anchor="e", fill=MUTED, font=LABEL)
+        now, (five, five_reset, week, week_reset, _), (five_full, week_full) = self.shown
+        for i, row in enumerate(rows):
+            top = p(ALERT_TOP + ALERT_ROW * i)
+            if i:
+                c.create_line(left, top - p(8), right, top - p(8), fill=TRACK)
+            if row == "five":
+                label, reset, used, full_at = "5-hour window", resets_in(five_reset, now), five, five_full
+                colour, word = pace(five, elapsed(five_reset, now, FIVE_HOURS), five_full, now)
+                pace_span = "the last half hour's"
+            else:
+                label, reset, used, full_at = "This week", resets_at(week_reset), week, week_full
+                colour, word = pace(week, elapsed(week_reset, now, WEEK), week_full, now)
+                pace_span = "the last day's"
+            c.create_text(left, top, text=label, anchor="w", fill=MUTED, font=LABEL)
+            c.create_text(right, top, text=reset, anchor="e", fill=MUTED, font=SMALL)
+            c.create_text(left, top + p(28), text=word, anchor="w", fill=colour, font=(FONT, 18, "bold"))
+            detail = f"{used:.0f}% used, at {pace_span} pace" if full_at else f"{used:.0f}% used"
+            c.create_text(left, top + p(54), text=detail, anchor="w", fill=MUTED, font=SMALL)
+
+    def close_alert(self, _):
+        self.alert.destroy()
+        self.alert = None
+        self.alert_rows = set()
 
     def draw(self):
         c, p = self.canvas, self.px
@@ -344,13 +468,13 @@ class Widget:
         if self.shown is None:
             c.create_text(p(WIDTH / 2), p(HEIGHT / 2), text="Reading Claude Code transcripts...", fill=MUTED, font=SMALL)
             return
-        now, (five, five_reset, week, week_reset, measured_at) = self.shown
+        now, (five, five_reset, week, week_reset, measured_at), (five_full, week_full) = self.shown
         left, right, mid = p(PAD), p(WIDTH - PAD), p(WIDTH / 2)
         c.create_text(left, p(30), text="5-hour window", anchor="w", fill=MUTED, font=LABEL)
         c.create_text(right, p(30), text=resets_in(five_reset, now), anchor="e", fill=MUTED, font=SMALL)
         five_run, week_run = elapsed(five_reset, now, FIVE_HOURS), elapsed(week_reset, now, WEEK)
-        five_colour, five_word = pace(five, five_run)
-        week_colour, week_word = pace(week, week_run)
+        five_colour, five_word = pace(five, five_run, five_full, now)
+        week_colour, week_word = pace(week, week_run, week_full, now)
         width, height = p(WIDTH), p(HEIGHT)
         # Painted in real pixels, so the ring and bar are as sharp at 150% scaling as at 100%.
         size = p(2 * (RING_R + RING_W / 2) + 10)

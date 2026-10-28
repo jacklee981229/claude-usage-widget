@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from usage_estimate import (FIVE_HOUR_FULL, WEEKLY_FULL, WEEKLY_RESET, TranscriptReader, combine, estimate,
-                            five_hour_window, read_official, weekly_window, weighted_cost)
+                            five_hour_window, forecast, read_official, weekly_window, weighted_cost)
 
 UTC = timezone.utc
 M = 1_000_000
@@ -168,6 +168,56 @@ class CombineTest(unittest.TestCase):
     def test_no_official_reading_is_the_estimate_alone(self):
         self.assertEqual(combine(self.costs, self.activity, self.NOW, None),
                          (*estimate(self.costs, self.activity, self.NOW), None))
+
+
+class ForecastTest(unittest.TestCase):
+    NOW = at("2026-10-28 06:00")
+    FIVE_RESET = NOW + timedelta(hours=2, minutes=44)
+    WEEK_RESET = at("2026-10-31 01:00")
+
+    def steady(self, percent, minutes, every=5, full=FIVE_HOUR_FULL):
+        """`percent` of a window used in even replies every `every` minutes over the last `minutes`."""
+        times = [self.NOW - timedelta(minutes=m) for m in range(0, minutes, every)]
+        return [(t, full * percent / 100 / len(times)) for t in times]
+
+    def five_full(self, costs, used, reset=None):
+        return forecast(costs, self.NOW, used, reset or self.FIVE_RESET, 0, self.WEEK_RESET)[0]
+
+    def test_68_percent_in_an_hour_and_a_half_fills_in_42_minutes(self):
+        # The last half hour holds 6 of the 18 replies, 22.7 points; 32 more take 42.4 minutes at that pace.
+        full = self.five_full(self.steady(68, 90), 68)
+        self.assertAlmostEqual((full - self.NOW) / timedelta(minutes=1), 42.35, places=1)
+
+    def test_the_same_pace_raises_it_at_30_percent(self):
+        self.assertIsNotNone(self.five_full(self.steady(30, 40), 30))
+        self.assertIsNone(self.five_full(self.steady(29, 40), 29))
+
+    def test_idle_for_a_quarter_hour_forecasts_nothing(self):
+        costs = [(t - timedelta(minutes=16), c) for t, c in self.steady(68, 90)]
+        self.assertIsNone(self.five_full(costs, 68))
+
+    def test_a_pace_that_lasts_past_the_reset_forecasts_nothing(self):
+        self.assertIsNone(self.five_full(self.steady(40, 30), 40, reset=self.NOW + timedelta(minutes=30)))
+        self.assertIsNotNone(self.five_full(self.steady(40, 30), 40, reset=self.NOW + timedelta(hours=4)))
+
+    def test_pace_counts_only_this_window(self):
+        # The window began 10 minutes ago: the previous window's replies before that don't set the pace.
+        reset = self.NOW + timedelta(hours=4, minutes=50)
+        old = [(self.NOW - timedelta(minutes=m), FIVE_HOUR_FULL) for m in (12, 15, 20)]
+        now_costs = self.steady(35, 10)
+        full = self.five_full(old + now_costs, 35, reset)
+        self.assertAlmostEqual((full - self.NOW) / timedelta(minutes=1), 65 / 35 * 10)
+
+    def test_no_window_running(self):
+        self.assertIsNone(forecast(self.steady(68, 90), self.NOW, 0, None, 0, self.WEEK_RESET)[0])
+
+    def test_week_paced_on_its_last_day(self):
+        # Wednesday 14:00 in Malaysia, 71% used, 30 points of it in the last day: full in a day, before Saturday.
+        costs = self.steady(30, 24 * 60, every=60, full=WEEKLY_FULL)
+        week_full = forecast(costs, self.NOW, 0, None, 71, self.WEEK_RESET)[1]
+        self.assertAlmostEqual((week_full - self.NOW) / timedelta(hours=1), 29 / 30 * 24)
+        self.assertIsNone(forecast(self.steady(10, 24 * 60, every=60, full=WEEKLY_FULL), self.NOW, 0, None, 71,
+                                   self.WEEK_RESET)[1])
 
 
 def user_line(ts, uuid):

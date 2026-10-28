@@ -37,6 +37,12 @@ WEEKLY_FULL = 1500.0
 
 FIVE_HOURS = timedelta(hours=5)
 WEEK = timedelta(days=7)
+# The forecast of when a window fills: only once this much of it is used and a reply came in the last quarter hour,
+# so a burst at the start or an idle afternoon doesn't predict anything. The pace is the 5-hour window's last half
+# hour and the week's last day.
+FORECAST_FROM = 30
+ACTIVE = timedelta(minutes=15)
+FIVE_HOUR_PACE, WEEKLY_PACE = timedelta(minutes=30), timedelta(days=1)
 # A known weekly reset; the weekly limit resets at this time every 7 days.
 WEEKLY_RESET = datetime(2026, 10, 3, 1, 0, tzinfo=timezone.utc)
 
@@ -207,6 +213,28 @@ def combine(costs, activity, now, official):
         week, week_reset = official["seven_day"][0] + since / WEEKLY_FULL * 100, official["seven_day"][1]
         used = True
     return five, five_reset, week, week_reset, measured_at if used else None
+
+
+def full_at(costs, now, used, reset, length, span, full):
+    """When `used` reaches 100% at the pace of the last `span`, if that comes before the window resets; else None.
+
+    The pace counts only this window's use, so a window that began ten minutes ago is paced on those ten minutes.
+    """
+    if reset is None or used < FORECAST_FROM or not any(now - ACTIVE < time <= now for time, _ in costs):
+        return None
+    start = max(now - span, reset - length)
+    spent = sum(cost for time, cost in costs if start < time <= now) / full * 100
+    if start >= now or spent <= 0:
+        return None
+    at = now + (now - start) * (max(0.0, 100 - used) / spent)
+    return at if at < reset else None
+
+
+def forecast(costs, now, five, five_reset, week, week_reset):
+    """Return (when the 5-hour window fills, when the week fills), each None unless it fills before its reset."""
+    costs = list(costs)
+    return (full_at(costs, now, five, five_reset, FIVE_HOURS, FIVE_HOUR_PACE, FIVE_HOUR_FULL),
+            full_at(costs, now, week, week_reset, WEEK, WEEKLY_PACE, WEEKLY_FULL))
 
 
 def estimate(costs, activity, now):

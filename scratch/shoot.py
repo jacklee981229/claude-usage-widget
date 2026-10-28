@@ -41,13 +41,14 @@ def at(day, hour, minute):
 
 
 SAT = at(31, 9, 0)  # the week resets Saturday 09:00
-# name: (now, (5-hour %, 5-hour reset, week %, week reset, official reading time))
+# name: (now, (5-hour %, 5-hour reset, week %, week reset, official reading time), (5-hour full at, week full at))
 STATES = {
-    "on-pace": (at(28, 14, 20), (34, at(28, 17, 20), 28, SAT, at(28, 14, 2))),
-    "ahead": (at(28, 11, 5), (63, at(28, 14, 20), 41, SAT, at(28, 10, 58))),
-    "nearly-full": (at(30, 19, 40), (91, at(30, 20, 28), 87, SAT, at(30, 19, 31))),
-    "estimate": (at(27, 16, 10), (47, at(27, 18, 20), 64, SAT, None)),
-    "not-started": (at(26, 8, 50), (0, None, 12, SAT, at(26, 8, 31))),
+    "on-pace": (at(28, 14, 20), (34, at(28, 17, 20), 28, SAT, at(28, 14, 2)), (None, None)),
+    "ahead": (at(28, 11, 5), (63, at(28, 14, 20), 41, SAT, at(28, 10, 58)), (None, None)),
+    "nearly-full": (at(30, 19, 40), (91, at(30, 20, 28), 87, SAT, at(30, 19, 31)), (None, None)),
+    "estimate": (at(27, 16, 10), (47, at(27, 18, 20), 64, SAT, None), (None, None)),
+    "not-started": (at(26, 8, 50), (0, None, 12, SAT, at(26, 8, 31)), (None, None)),
+    "running-out": (at(28, 14, 0), (68, at(28, 16, 44), 71, SAT, at(28, 13, 58)), (at(28, 14, 43), at(29, 13, 10))),
 }
 
 
